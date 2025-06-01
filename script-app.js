@@ -1,3 +1,18 @@
+// Firebase configuration (replace with your Firebase project config)
+const firebaseConfig = {
+    apiKey: "YOUR_API_KEY",
+    authDomain: "YOUR_AUTH_DOMAIN",
+    projectId: "YOUR_PROJECT_ID",
+    storageBucket: "YOUR_STORAGE_BUCKET",
+    messagingSenderId: "YOUR_MESSAGING_SENDER_ID",
+    appId: "YOUR_APP_ID"
+};
+
+// Initialize Firebase
+firebase.initializeApp(firebaseConfig);
+const storage = firebase.storage();
+
+// Object to store surveyor credentials (username: password)
 let surveyors = {
     "surveyor1": "password1",
     "admin": "admin"
@@ -18,8 +33,17 @@ $(document).ready(function() {
     const takePhoto = $('#take-photo');
     const cameraSelect = $('#camera-select');
 
-    // Show login modal on page load
-    $('#loginModal').modal('show');
+    // Show login modal on page load with error handling
+    try {
+        $('#loginModal').modal({
+            backdrop: 'static', // Prevent closing by clicking outside
+            keyboard: false // Prevent closing with ESC key
+        });
+        $('#loginModal').modal('show');
+    } catch (err) {
+        console.error("Failed to show login modal:", err);
+        alert("Error initializing login modal. Please check if Bootstrap is loaded correctly.");
+    }
 
     // Start camera with selected facing mode
     startCamera.on('click', function() {
@@ -29,6 +53,7 @@ $(document).ready(function() {
         })
             .then(function(stream) {
                 video.srcObject = stream;
+                video.stream = stream; // Store stream for cleanup
                 startCamera.hide();
                 takePhoto.show();
                 cameraSelect.hide();
@@ -39,12 +64,17 @@ $(document).ready(function() {
             });
     });
 
-    // Capture photo and display on canvas
+    // Capture photo and stop camera stream
     takePhoto.on('click', function() {
         context.drawImage(video, 0, 0, canvas.width, canvas.height);
         $('#video-container').hide();
         $('#canvas-container').show();
         takePhoto.hide();
+        // Stop camera stream
+        if (video.srcObject) {
+            video.srcObject.getTracks().forEach(track => track.stop());
+            video.srcObject = null;
+        }
     });
 
     // Get geolocation on button click
@@ -78,30 +108,50 @@ $(document).ready(function() {
         }
     });
 
-    // Placeholder function to simulate image upload and return a web link
-    function uploadImage(blob, imageName) {
-        // TODO: Replace with actual server-side upload (e.g., AWS S3, Firebase, or custom server)
-        // Example: POST blob to /upload endpoint and return public URL
-        return `https://your-server.com/images/${imageName}`; // Placeholder URL
+    // Upload image to Firebase Storage
+    async function uploadImage(blob, imageName) {
+        try {
+            const storageRef = storage.ref(`images/${imageName}`);
+            await storageRef.put(blob);
+            const url = await storageRef.getDownloadURL();
+            return url;
+        } catch (err) {
+            console.error("Image upload failed:", err);
+            alert("Failed to upload image.");
+            throw err;
+        }
     }
 
     // Handle survey form submission
     $('#survey-form').submit(async function(e) {
         e.preventDefault();
+
+        // Validate mobile number
+        const mobile = $('#owner-mobile-number').val();
+        if (!/^[0-9]{10}$/.test(mobile)) {
+            alert("Please enter a valid 10-digit mobile number.");
+            return;
+        }
+
         let dataUrl = canvas.toDataURL();
         let imageName = `survey_${Date.now()}.png`;
         let imageBlob = dataURItoBlob(dataUrl);
-        let imageUrl = await uploadImage(imageBlob, imageName); // Await server response
+        let imageUrl;
+        try {
+            imageUrl = await uploadImage(imageBlob, imageName);
+        } catch (err) {
+            return; // Stop submission if upload fails
+        }
 
-        // Format timestamp in IST (UTC + 5:30)
+        // Format timestamp in IST (DD-MM-YYYY HH:MM:SS)
         let date = new Date();
-        date.setHours(date.getHours() + 5); // Adjust for IST
+        date.setHours(date.getHours() + 5);
         date.setMinutes(date.getMinutes() + 30);
-        let timestamp = date.toISOString().replace('T', ' ').substring(0, 19);
+        let timestamp = `${date.getDate().toString().padStart(2, '0')}-${(date.getMonth() + 1).toString().padStart(2, '0')}-${date.getFullYear()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}:${date.getSeconds().toString().padStart(2, '0')}`;
 
         let entry = {
             shopOwner: $('#shop-owner-name').val(),
-            mobile: $('#owner-mobile-number').val(),
+            mobile: mobile,
             type: $('#shop-type').val(),
             location: $('#location').text(),
             photoUrl: imageUrl,
@@ -124,6 +174,15 @@ $(document).ready(function() {
             </tr>
         `);
 
+        // Show success alert
+        $('body').append(`
+            <div class="alert alert-success alert-dismissible fade show" role="alert">
+                Survey submitted successfully!
+                <button type="button" class="btn-close" data-bs-dismiss="alert"></button>
+            </div>
+        `);
+        setTimeout(() => $('.alert').alert('close'), 3000);
+
         // Reset form and UI
         $('#survey-form')[0].reset();
         $('#location').text('');
@@ -131,6 +190,8 @@ $(document).ready(function() {
         $('#video-container').show();
         startCamera.show();
         cameraSelect.show();
+        // Clear canvas
+        context.clearRect(0, 0, canvas.width, canvas.height);
     });
 
     // Handle new surveyor credential creation
@@ -184,8 +245,9 @@ $(document).ready(function() {
                 entry.surveyorId,
                 entry.timestamp
             ]);
-            let link = { text: 'View/Download Photo', hyperlink: entry.photoUrl };
-            row.getCell(4).value = link;
+            let linkCell = row.getCell(4);
+            linkCell.value = { text: 'View/Download Photo', hyperlink: entry.photoUrl };
+            linkCell.font = { color: { argb: 'FF0000FF' }, underline: true }; // Blue, underlined
         });
 
         wb.xlsx.writeBuffer().then(buf => {
@@ -213,4 +275,4 @@ function dataURItoBlob(dataURI) {
         ia[i] = byteString.charCodeAt(i);
     }
     return new Blob([ab], { type: 'image/png' });
-} contents here
+}
